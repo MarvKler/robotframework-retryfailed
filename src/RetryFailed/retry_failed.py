@@ -14,24 +14,53 @@ limitations under the License."""
 
 import re
 
+from dataclasses import dataclass, asdict
+from pathlib import Path
+
 from robot.api import ExecutionResult, ResultVisitor, logger
 from robot.api.deco import library
 from robot.libraries.BuiltIn import BuiltIn
 from robot.utils.robottypes import is_truthy
+from robot.result import Keyword as ResultKeyword
+from robot.running import Keyword as RunningKeyword
 
 duplicate_test_pattern = re.compile(
     r"Multiple .*? with name '(?P<test>.*?)' executed in.*? suite '(?P<suite>.*?)'."
 )
 linebreak = "\n"
 
+@dataclass
+class KeywordMetaData:
+    kw_obj: RunningKeyword
+    kw_index: int
+    kw_name: str
+    kw_source: str
+    kw_lineno: int
+    retries: int
+    retries_performed: int
+
 
 @library(scope="GLOBAL")
 class RetryFailed:
 
     ROBOT_LISTENER_API_VERSION = 3
+    LOGGER_PREFIX = "[KeywordRetry]"
 
-    def __init__(self, global_retries=0, keep_retried_tests=False, log_level=None):
+    def __init__(self,
+            global_test_retries: int = 0,
+            keep_retried_tests: bool = False,
+            log_level: str | None = None,
+            warn_on_retry: bool = True
+        ):
         self.ROBOT_LIBRARY_LISTENER = self
+
+        # WORKAROUND FOR ARGS
+        global_retries = global_test_retries
+
+        # Generic Settings
+        self.warn_on_retry: bool = warn_on_retry
+
+        # TestRetryListener
         self.retried_tests = []
         self.retries = 0
         self._max_retries_by_default = int(global_retries)
@@ -39,6 +68,10 @@ class RetryFailed:
         self.keep_retried_tests = is_truthy(keep_retried_tests)
         self.log_level = log_level
         self._original_log_level = None
+
+        # KeywordRetryListener
+        self.retry_keywords: list[KeywordMetaData] = []
+        self._index_counter: int = 1
 
     def start_test(self, test, result):
         if self.retries:
@@ -79,7 +112,7 @@ class RetryFailed:
                 )
         self.retries = 0
         return
-
+    
     def end_suite(self, suite, result):
         test_dict = {}
         result_dict = {}
@@ -89,6 +122,78 @@ class RetryFailed:
         result.tests = list(result_dict.values())
         suite.tests = list(test_dict.values())
 
+    def start_keyword(self, keyword: RunningKeyword, result: ResultKeyword):
+
+        for tag in result.tags:
+            retry_kw = re.match(r"keyword:retry\((\d+)\)", tag)
+            if not retry_kw:
+                return
+            _retries = int(retry_kw.group(1))
+            if retry_kw and _retries > 0:
+                kw_data = KeywordMetaData (
+                    kw_obj = keyword,
+                    kw_index = keyword.parent.body.index(keyword),
+                    kw_name = keyword.name,
+                    kw_source = Path(keyword.source).name,
+                    kw_lineno = keyword.lineno,
+                    retries = _retries,
+                    retries_performed = 0,
+                )
+
+                # check if keyword is already registered for the retry
+                for registered_retry_keyword in self.retry_keywords:
+                    if (
+                            registered_retry_keyword.kw_name == kw_data.kw_name
+                            and
+                            registered_retry_keyword.kw_source == kw_data.kw_source
+                            and
+                            registered_retry_keyword.kw_lineno == kw_data.kw_lineno
+                        ):
+                        return
+                self.retry_keywords.append(kw_data)
+
+    def end_keyword(self, keyword: RunningKeyword, result: ResultKeyword):
+
+        executed_kw_name = keyword.name
+        executed_kw_source = Path(keyword.source).name
+
+        match_kw_retry = False
+        kw_to_retry: KeywordMetaData
+        for index, kw in enumerate(self.retry_keywords):
+            if kw.kw_name != executed_kw_name or kw.kw_source != executed_kw_source:
+                continue
+            else:
+                match_kw_retry = True
+                current_index = index
+                kw_to_retry = kw
+
+        # If currently executed keyword does not match any defined RetryKeyword -> just return
+        if not match_kw_retry:
+            return
+
+        if result.status == "PASS":
+            msg = f"{self.LOGGER_PREFIX} [{kw_to_retry.kw_name}] PASSED on {kw_to_retry.retries_performed}. retry."
+            logger.info(msg)
+            result.doc += f"\n\n{msg}"
+            self.retry_keywords.pop(current_index)
+
+        if result.status == "FAIL":
+            if kw_to_retry.retries and kw_to_retry.retries_performed < kw_to_retry.retries:
+                keyword.parent.body.insert(kw_to_retry.kw_index + self._index_counter, kw_to_retry.kw_obj)
+                result.status = "NOT RUN"
+                kw_to_retry.retries_performed += 1
+                self.retry_keywords[current_index].retries_performed = kw_to_retry.retries_performed
+
+                msg = f"{self.LOGGER_PREFIX} [{kw_to_retry.kw_name}] - Skipped for {self.retry_keywords[current_index].retries_performed}. Retry..."
+                if self.warn_on_retry:
+                    logger.warn(msg)
+                result.doc += f"\n\n{msg}"
+            else:
+                msg = f"{"\n\n" * bool(result.message)}{self.LOGGER_PREFIX} [{kw_to_retry.kw_name}] FAILED on {self.retry_keywords[current_index].retries_performed}. retry."
+                result.doc += msg
+                result.message += msg
+                self.retry_keywords.pop(current_index)
+
     def message(self, message):
         if message.level == "WARN":
             match = duplicate_test_pattern.match(message.message)
@@ -96,17 +201,20 @@ class RetryFailed:
                 message.message = (
                     f"Retry {self.retries}/{self.max_retries} of test '{match.group('test')}':"
                 )
+                if not self.warn_on_retry:
+                    message.level = "INFO"
 
     def output_file(self, original_output_xml):
         result = ExecutionResult(original_output_xml)
-        result.visit(RetryMerger(self.retried_tests, self.keep_retried_tests))
+        result.visit(RetryMerger(self.retried_tests, self.keep_retried_tests, self.warn_on_retry))
         result.save()
 
 
 class RetryMerger(ResultVisitor):
-    def __init__(self, retried_tests, keep_retried_tests=False):
+    def __init__(self, retried_tests, keep_retried_tests=False, warn_on_retry: bool = True):
         self.retried_tests = retried_tests
         self.keep_retried_tests = keep_retried_tests
+        self.warn_on_retry = warn_on_retry
         self.test_ids = {}
 
     def start_suite(self, suite):
@@ -126,7 +234,7 @@ class RetryMerger(ResultVisitor):
         messages = []
         retry_messages = {}
         for message in errors.messages:
-            if message.level == "WARN":
+            if message.level == "WARN" and self.warn_on_retry:
                 pattern = re.compile(
                     r"Retry (?P<retries>\d+)/(?P<max_retries>\d+) of test '(?P<test>.+)':"
                 )
