@@ -10,15 +10,26 @@ ${retry_2}    ${0}
 *** Test Cases ***
 My Simple Test
     Log     Hello World
+    Log     This TRACE message should not be logged!    level=TRACE
     Should Be Equal    Hello    Hello
 
 Sometime Fail
     [Tags]    test:retry(1)
+    Log     This TRACE message can be logged sometimes    level=TRACE
     Should Be True    ${{random.randint(0, 1)}} == 1
 
 Sometime Fail1
     [Tags]    test:retry(3)
+    Log     This TRACE message can be logged sometimes    level=TRACE
     Should Be True    ${{random.randint(0, 1)}} == 1
+
+My Simple Test2
+    Log     Hello World
+    Log     This TRACE message should not be logged!    level=TRACE
+    Should Be Equal    Hello    Hello
+
+Log Trace Message
+    Log     This TRACE message should not be logged!    level=TRACE
 
 Sometime Fail2
     [Tags]    test:retry(1)
@@ -26,11 +37,13 @@ Sometime Fail2
 
 Passes after 3 Fails
     [Tags]    test:retry(3)
+    Log     This TRACE message should be logged on failures only!    level=TRACE
     Should Be Equal    ${retry_1}    ${3}
     [Teardown]    Set Suite Variable    ${retry_1}    ${retry_1 + 1}
 
 Fails on 4th Exec
     [Tags]    task:retry(5)
+    Log     This TRACE message should be logged on failures only!    level=TRACE
     Should Be Equal    ${retry_2}    ${4}
     [Teardown]    Set Suite Variable    ${retry_2}    ${retry_2 + 1}
 

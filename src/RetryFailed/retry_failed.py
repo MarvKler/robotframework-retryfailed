@@ -44,7 +44,7 @@ class RetryFailed:
         if self.retries:
             BuiltIn().set_test_variable("${RETRYFAILED_RETRY_INDEX}", self.retries)
             if self.log_level is not None:
-                self._original_log_level = BuiltIn()._context.output.set_log_level(self.log_level)
+                self._original_log_level = BuiltIn().set_log_level(self.log_level)
         for tag in test.tags:
             retry_match = re.match(r"(?:test|task):retry\((\d+)\)", tag)
             if retry_match:
@@ -55,7 +55,7 @@ class RetryFailed:
 
     def end_test(self, test, result):
         if self.retries and self._original_log_level is not None:
-            BuiltIn()._context.output.set_log_level(self._original_log_level)
+            BuiltIn().set_log_level(self._original_log_level)
         if not self.max_retries:
             self.retries = 0
             return
