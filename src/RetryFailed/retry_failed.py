@@ -86,12 +86,12 @@ class RetryFailed:
             BuiltIn().set_test_variable("${RETRYFAILED_RETRY_INDEX}", self.retries)
             if self.log_level is not None:
                 self._original_log_level = BuiltIn().set_log_level(self.log_level)
+        if self.retries == 0 and not self.test_retry_active:
+            self.original_testcase_object = copy.deepcopy(test)
         for tag in test.tags:
             retry_match = re.match(r"(?:test|task):retry\((\d+)\)", tag)
             if retry_match:
                 self.max_retries = int(retry_match.group(1))
-                if self.retries == 0 and not self.test_retry_active:
-                    self.original_testcase_object = copy.deepcopy(test)
                 return
         self.max_retries = self._max_retries_by_default
         return
