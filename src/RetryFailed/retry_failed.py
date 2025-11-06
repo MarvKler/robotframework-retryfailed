@@ -41,7 +41,6 @@ class KeywordMetaData:
     kw_lineno: int
     retries: int
     retries_performed: int
-    retry_active: bool
 
 
 
@@ -59,9 +58,6 @@ class RetryFailed:
         ):
         self.ROBOT_LIBRARY_LISTENER = self
 
-        # WORKAROUND FOR ARGS
-        global_retries = global_test_retries
-
         # Generic Settings
         self.warn_on_test_retry: bool = is_truthy(warn_on_test_retry)
         self.warn_on_kw_retry: bool = is_truthy(warn_on_kw_retry)
@@ -69,8 +65,8 @@ class RetryFailed:
         # TestRetryListener
         self.retried_tests = []
         self.retries = 0
-        self._max_retries_by_default = int(global_retries)
-        self.max_retries = global_retries
+        self._max_retries_by_default = int(global_test_retries)
+        self.max_retries = global_test_retries
         self.keep_retried_tests = is_truthy(keep_retried_tests)
         self.log_level = log_level
         self._original_log_level = None
@@ -151,7 +147,6 @@ class RetryFailed:
                     kw_lineno = keyword.lineno,
                     retries = _retries,
                     retries_performed = 0,
-                    retry_active=False,
                 )
 
                 # check if keyword is already registered for the retry
@@ -201,9 +196,6 @@ class RetryFailed:
             self.retry_keywords.pop(current_index)
 
         if result.status == "FAIL":
-            # activate retry
-            if not kw_to_retry.retry_active and kw_to_retry.retries_performed == 0:
-                kw_to_retry.retry_active = True
 
             if kw_to_retry.retries and kw_to_retry.retries_performed < kw_to_retry.retries:
                 # Set loglevel for retry
