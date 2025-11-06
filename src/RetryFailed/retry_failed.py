@@ -171,6 +171,10 @@ class RetryFailed:
         executed_kw_name = keyword.name
         executed_kw_source = Path(keyword.source).name
 
+        # reset original loglevel
+        if self._original_log_level:
+            BuiltIn().set_log_level(self._original_log_level)
+
         match_kw_retry = False
         kw_to_retry: KeywordMetaData
         for index, kw in enumerate(self.retry_keywords):
@@ -202,6 +206,10 @@ class RetryFailed:
                 kw_to_retry.retry_active = True
 
             if kw_to_retry.retries and kw_to_retry.retries_performed < kw_to_retry.retries:
+                # Set loglevel for retry
+                if self.log_level:
+                    self._original_log_level = BuiltIn().set_log_level(self.log_level)
+
                 keyword.parent.body.insert(kw_to_retry.kw_index + self._index_counter, kw_to_retry.kw_obj)
                 result.status = "NOT RUN"
                 kw_to_retry.retries_performed += 1
