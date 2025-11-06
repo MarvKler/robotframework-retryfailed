@@ -1,8 +1,6 @@
-*** Settings ***
-# Library     RetryFailed    log_level=TRACE
-
-
 *** Variables ***
+${tc_01}    ${0}
+${tc_02}    ${0}
 ${retry_1}    ${0}
 ${retry_2}    ${0}
 
@@ -13,15 +11,17 @@ My Simple Test
     Log     This TRACE message should not be logged!    level=TRACE
     Should Be Equal    Hello    Hello
 
-Sometime Fail
-    [Tags]    test:retry(1)
+TC01 - Retry Once
+    [Tags]    test:retry(2)
     Log     This TRACE message can be logged sometimes    level=TRACE
-    Should Be True    ${{random.randint(0, 1)}} == 1
+    VAR    ${tc_01} =    ${${tc_01}+1}    scope=SUITE
+    Should Be Equal As Integers    ${tc_01}    ${2}
 
-Sometime Fail1
-    [Tags]    test:retry(3)
+TC01 - Retry Twice
+    [Tags]    test:retry(2)
     Log     This TRACE message can be logged sometimes    level=TRACE
-    Should Be True    ${{random.randint(0, 1)}} == 1
+    VAR    ${tc_02} =    ${${tc_02}+1}    scope=SUITE
+    Should Be Equal As Integers    ${tc_02}    ${3}
 
 My Simple Test2
     Log     Hello World
@@ -31,17 +31,13 @@ My Simple Test2
 Log Trace Message
     Log     This TRACE message should not be logged!    level=TRACE
 
-Sometime Fail2
-    [Tags]    test:retry(1)
-    Should Be True    ${{random.randint(0, 1)}} == 1
-
 Passes after 3 Fails
     [Tags]    test:retry(3)
     Log     This TRACE message should be logged on failures only!    level=TRACE
     Should Be Equal    ${retry_1}    ${3}
     [Teardown]    Set Suite Variable    ${retry_1}    ${retry_1 + 1}
 
-Fails on 4th Exec
+Passes on 4th Exec
     [Tags]    task:retry(5)
     Log     This TRACE message should be logged on failures only!    level=TRACE
     Should Be Equal    ${retry_2}    ${4}
