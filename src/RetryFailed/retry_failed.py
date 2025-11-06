@@ -15,10 +15,10 @@ limitations under the License."""
 import copy
 import re
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from pathlib import Path
 
-from robot.api import ExecutionResult, ResultVisitor, logger
+from robot.api import ExecutionResult, ResultVisitor
 from robot.api.deco import library
 from robot.libraries.BuiltIn import BuiltIn
 from robot.utils.robottypes import is_truthy
