@@ -16,6 +16,7 @@ import copy
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 from robot.api.deco import library
 from robot.api.interfaces import ListenerV3
@@ -40,6 +41,7 @@ linebreak = "\n"
 
 @dataclass
 class KeywordMetaData:
+    kw_uuid: str
     kw_obj: RunningKeyword
     kw_index: int
     kw_name: str
@@ -72,6 +74,7 @@ class RetryFailed(ListenerV3):
         self.max_retries = global_test_retries
         self.keep_retried_tests = is_truthy(keep_retried_tests)
         self.log_level = log_level
+        self.kw_control_log_level: str | None = None
         self._original_log_level: str | None = None
         self.test_retry_active: bool = False
         self.original_testcase_object: RunningTestCase = None
@@ -103,6 +106,7 @@ class RetryFailed(ListenerV3):
             _retries = int(retry_kw.group(1))
             if retry_kw and _retries > 0:
                 kw_data = KeywordMetaData(
+                    kw_uuid=str(uuid4),
                     kw_obj=keyword,
                     kw_index=keyword.parent.body.index(keyword),
                     kw_name=keyword.name,
@@ -123,17 +127,10 @@ class RetryFailed(ListenerV3):
                 self.retry_keywords.append(kw_data)
 
     def end_keyword(self, keyword: RunningKeyword, result: ResultKeyword) -> None:
-        executed_kw_name = keyword.name
-        executed_kw_source = Path(keyword.source).name
-
-        # reset original loglevel
-        if self._original_log_level:
-            BuiltIn().set_log_level(self._original_log_level)
-
         match_kw_retry = False
         kw_to_retry: KeywordMetaData
         for index, kw in enumerate(self.retry_keywords):
-            if kw.kw_name != executed_kw_name or kw.kw_source != executed_kw_source:
+            if kw.kw_name != keyword.name or kw.kw_source != Path(keyword.source).name:
                 continue
             match_kw_retry = True
             current_index = index
@@ -147,12 +144,16 @@ class RetryFailed(ListenerV3):
         level: str = "WARN" if self.warn_on_kw_retry else "INFO"
 
         if result.status == "PASS":
-            doc = (
-                f"[Keyword: {kw_to_retry.kw_name}] PASSED on "
-                f"{kw_to_retry.retries_performed}. retry."
-            )
-            msg = f"[Keyword: {link}] PASSED on {kw_to_retry.retries_performed}. retry."
+            # reset log level
+            self.reset_log_level(kw_to_retry)
+
+            # log specific message if keyword PASSED on retry
             if kw_to_retry.retries_performed > 0:
+                doc = (
+                    f"[Keyword: {kw_to_retry.kw_name}] PASSED on "
+                    f"{kw_to_retry.retries_performed}. retry."
+                )
+                msg = f"[Keyword: {link}] PASSED on {kw_to_retry.retries_performed}. retry."
                 BuiltIn().log(msg, level=level, html=True)
                 result.doc += f"\n\n{doc}"
             self.retry_keywords.pop(current_index)
@@ -161,6 +162,7 @@ class RetryFailed(ListenerV3):
             if kw_to_retry.retries and kw_to_retry.retries_performed < kw_to_retry.retries:
                 # Set loglevel for retry
                 if self.log_level:
+                    self.kw_control_log_level = kw_to_retry.kw_uuid
                     self._original_log_level = BuiltIn().set_log_level(self.log_level)
 
                 keyword.parent.body.insert(
@@ -174,6 +176,9 @@ class RetryFailed(ListenerV3):
                 msg = f"[Keyword: {kw_to_retry.kw_name}] - Skipped for {performed}. Retry..."
                 result.doc += f"\n\n{msg}"
             else:
+                # reset log level
+                self.reset_log_level(kw_to_retry)
+
                 prefix = "\n\n" if result.message else ""
                 doc = (
                     f"{prefix}[Keyword: {kw_to_retry.kw_name}] FAILED on "
@@ -253,6 +258,16 @@ class RetryFailed(ListenerV3):
             if keyword_result.id
             else keyword_result.kwname
         )
+
+    def reset_log_level(self, kw_object: KeywordMetaData) -> None:
+        """
+        Reset to original loglevel if keyword uuid does match to the keyword
+        which has initially modified the loglevel.
+        """
+        if self._original_log_level and kw_object.kw_uuid == self.kw_control_log_level:
+            self.kw_control_log_level = None
+            self._original_log_level = None
+            BuiltIn().set_log_level(self._original_log_level)
 
 
 class RetryMerger(ResultVisitor):  # type: ignore[misc]
