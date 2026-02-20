@@ -20,6 +20,7 @@ from uuid import uuid4
 
 from robot.api.deco import library
 from robot.api.interfaces import ListenerV3
+from robot.api.logger import LogLevel
 from robot.libraries.BuiltIn import BuiltIn
 from robot.model import Error as ModelError
 from robot.model import TestSuite as ModelTestSuite
@@ -83,6 +84,8 @@ class RetryFailed(ListenerV3):
         self.retry_keywords: list[KeywordMetaData] = []
         self._index_counter: int = 1
 
+        self.kw_retry_active: bool = False
+
     def start_test(self, test: RunningTestCase, result: ResultTestCase) -> None:
         if self.retries:
             BuiltIn().set_test_variable("${RETRYFAILED_RETRY_INDEX}", self.retries)
@@ -127,6 +130,12 @@ class RetryFailed(ListenerV3):
                 self.retry_keywords.append(kw_data)
 
     def end_keyword(self, keyword: RunningKeyword, result: ResultKeyword) -> None:
+
+        # retry not required for passed keyword and non active retry
+        if result.status == "PASS" and not self.kw_retry_active:
+            return
+
+        # check if current keyword got registered for retries
         match_kw_retry = False
         kw_to_retry: KeywordMetaData
         for index, kw in enumerate(self.retry_keywords):
@@ -141,9 +150,12 @@ class RetryFailed(ListenerV3):
             return
 
         link = self._get_keyword_link(result)
-        level: str = "WARN" if self.warn_on_kw_retry else "INFO"
+        level: LogLevel = "WARN" if self.warn_on_kw_retry else "INFO"
 
         if result.status == "PASS":
+            # reset state: no active kw retry
+            self.kw_retry_active = False
+
             # reset log level
             self.reset_log_level(kw_to_retry)
 
@@ -160,6 +172,9 @@ class RetryFailed(ListenerV3):
 
         if result.status == "FAIL":
             if kw_to_retry.retries and kw_to_retry.retries_performed < kw_to_retry.retries:
+                # set state: active kw retry
+                self.kw_retry_active = True
+
                 # Set loglevel for retry
                 if self.log_level:
                     self.kw_control_log_level = kw_to_retry.kw_uuid
@@ -176,6 +191,9 @@ class RetryFailed(ListenerV3):
                 msg = f"[Keyword: {kw_to_retry.kw_name}] - Skipped for {performed}. Retry..."
                 result.doc += f"\n\n{msg}"
             else:
+                # set state: active kw retry
+                self.kw_retry_active = True
+
                 # reset log level
                 self.reset_log_level(kw_to_retry)
 

@@ -1,3 +1,8 @@
+*** Settings ***
+Library    KeywordRetry.py
+Suite Setup    Retry Three Times    3    suite setup
+
+
 *** Variables ***
 ${counter_01: int} =    0
 ${counter_02: int} =    0
