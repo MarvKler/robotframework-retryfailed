@@ -47,8 +47,22 @@ Test 7 - User level Retry FAIL with Teardown
     User Level Retry Three Times    5    keyword
     [Teardown]    User Level Retry Three Times    5    teardown
 
+Test 8 
+    Retry Three Times    3
+    Log  1234
+
+Test 9 
+    Recurse    0
+
 
 *** Keywords ***
+Recurse
+    [Tags]    keyword:retry(4)
+    [Arguments]    ${arg: int}
+    IF    $arg == 3    RETURN
+
+    Recurse    ${arg + 1}
+
 High Level Pass
     Log    High Level Pass
 

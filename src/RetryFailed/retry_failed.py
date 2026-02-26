@@ -16,6 +16,7 @@ import copy
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 from uuid import uuid4
 
 from robot.api.deco import library
@@ -39,17 +40,10 @@ duplicate_test_pattern = re.compile(
 )
 linebreak = "\n"
 
-
 @dataclass
-class KeywordMetaData:
-    kw_uuid: str
-    kw_obj: RunningKeyword
-    kw_index: int
-    kw_name: str
-    kw_source: str
-    kw_lineno: int
-    retries: int
-    retries_performed: int
+class RetryKeyword:
+    keyword: RunningKeyword
+    remaining_retries: int
 
 
 @library(scope="GLOBAL")
@@ -70,7 +64,7 @@ class RetryFailed(ListenerV3):
 
         # TestRetryListener
         self.retried_tests: list[str] = []
-        self.retries = 0
+        self.test_retries = 0
         self._max_retries_by_default = int(global_test_retries)
         self.max_retries = global_test_retries
         self.keep_retried_tests = is_truthy(keep_retried_tests)
@@ -81,160 +75,107 @@ class RetryFailed(ListenerV3):
         self.original_testcase_object: RunningTestCase = None
 
         # KeywordRetryListener
-        self.retry_keywords: list[KeywordMetaData] = []
-        self._index_counter: int = 1
+        self.retry_stack: list[RetryKeyword] = []
 
-        self.kw_retry_active: bool = False
+        # Regex to identify retry definition in tags
+        self.kw_retry_regex = r"keyword:retry\((\d+)\)"
+        self.test_retry_regex = r"(?:test|task):retry\((\d+)\)"
 
     def start_test(self, test: RunningTestCase, result: ResultTestCase) -> None:
-        if self.retries:
-            BuiltIn().set_test_variable("${RETRYFAILED_RETRY_INDEX}", self.retries)
+        if self.test_retries:
+            BuiltIn().set_test_variable("${RETRYFAILED_RETRY_INDEX}", self.test_retries)
             if self.log_level is not None:
                 self._original_log_level = BuiltIn().set_log_level(self.log_level)
-        if self.retries == 0 and not self.test_retry_active:
+        if self.test_retries == 0 and not self.test_retry_active:
             self.original_testcase_object = copy.deepcopy(test)
-        for tag in test.tags:
-            retry_match = re.match(r"(?:test|task):retry\((\d+)\)", tag)
-            if retry_match:
-                self.max_retries = int(retry_match.group(1))
-                return
+        
+        retry_match = self._check_if_retry(test.tags, "TEST")
+        if retry_match:
+            self.max_retries = int(retry_match.group(1))
+            return
         self.max_retries = self._max_retries_by_default
         return
 
     def start_keyword(self, keyword: RunningKeyword, result: ResultKeyword) -> None:
-        for tag in result.tags:
-            retry_kw = re.match(r"keyword:retry\((\d+)\)", tag)
-            if not retry_kw:
-                return
-            _retries = int(retry_kw.group(1))
-            if retry_kw and _retries > 0:
-                kw_data = KeywordMetaData(
-                    kw_uuid=str(uuid4),
-                    kw_obj=keyword,
-                    kw_index=keyword.parent.body.index(keyword),
-                    kw_name=keyword.name,
-                    kw_source=Path(keyword.source).name,
-                    kw_lineno=keyword.lineno,
-                    retries=_retries,
-                    retries_performed=0,
-                )
+        pass
 
-                # check if keyword is already registered for the retry
-                for registered_retry_keyword in self.retry_keywords:
-                    if (
-                        registered_retry_keyword.kw_name == kw_data.kw_name
-                        and registered_retry_keyword.kw_source == kw_data.kw_source
-                        and registered_retry_keyword.kw_lineno == kw_data.kw_lineno
-                    ):
-                        return
-                self.retry_keywords.append(kw_data)
-
-    def end_keyword(self, keyword: RunningKeyword, result: ResultKeyword) -> None:
-
-        # retry not required for passed keyword and non active retry
-        if result.status == "PASS" and not self.kw_retry_active:
+    def end_keyword(self, keyword: RunningKeyword, result: ResultKeyword):
+        
+        # if keyword is not registered for retries -> return
+        if not (retries := self._check_if_retry(result.tags, "KEYWORD")):
             return
-
-        # check if current keyword got registered for retries
-        match_kw_retry = False
-        kw_to_retry: KeywordMetaData
-        for index, kw in enumerate(self.retry_keywords):
-            if kw.kw_name != keyword.name or kw.kw_source != Path(keyword.source).name:
-                continue
-            match_kw_retry = True
-            current_index = index
-            kw_to_retry = kw
-
-        # If currently executed keyword does not match any defined RetryKeyword -> just return
-        if not match_kw_retry:
-            return
-
-        link = self._get_keyword_link(result)
+        
         level: LogLevel = "WARN" if self.warn_on_kw_retry else "INFO"
-
-        if result.status == "PASS":
-            # reset state: no active kw retry
-            self.kw_retry_active = False
-
-            # reset log level
-            self.reset_log_level(kw_to_retry)
-
-            # log specific message if keyword PASSED on retry
-            if kw_to_retry.retries_performed > 0:
-                doc = (
-                    f"[Keyword: {kw_to_retry.kw_name}] PASSED on "
-                    f"{kw_to_retry.retries_performed}. retry."
-                )
-                msg = f"[Keyword: {link}] PASSED on {kw_to_retry.retries_performed}. retry."
+        
+        if result.status != "FAIL":
+            if self.retry_stack and self.retry_stack[-1].keyword == keyword:
+                doc = f"[Keyword: {keyword.name}] PASSED on {retries - self.retry_stack[-1].remaining_retries}. retry."
+                msg = f"[Keyword: {self._get_keyword_link(result)}] PASSED on {retries - self.retry_stack[-1].remaining_retries}. retry."
                 BuiltIn().log(msg, level=level, html=True)
                 result.doc += f"\n\n{doc}"
-            self.retry_keywords.pop(current_index)
-
-        if result.status == "FAIL":
-            if kw_to_retry.retries and kw_to_retry.retries_performed < kw_to_retry.retries:
-                # set state: active kw retry
-                self.kw_retry_active = True
-
-                # Set loglevel for retry
-                if self.log_level:
-                    self.kw_control_log_level = kw_to_retry.kw_uuid
-                    self._original_log_level = BuiltIn().set_log_level(self.log_level)
-
-                keyword.parent.body.insert(
-                    kw_to_retry.kw_index + self._index_counter, kw_to_retry.kw_obj
-                )
-                result.status = "NOT RUN"
-                kw_to_retry.retries_performed += 1
-                self.retry_keywords[current_index].retries_performed = kw_to_retry.retries_performed
-
-                performed = self.retry_keywords[current_index].retries_performed
-                msg = f"[Keyword: {kw_to_retry.kw_name}] - Skipped for {performed}. Retry..."
+                self.retry_stack.pop()
+                if not self.retry_stack and self.test_retries:
+                    BuiltIn().set_log_level(self._original_log_level)
+                    self._original_log_level = None
+            return
+        
+        if keyword.type in ("SETUP", "TEARDOWN"):
+            msg = "Keyword in SETUP and TEARDOWN can't be retried directly - use wrapper keyword instead!"
+            result.doc += f"\n\n{msg}"
+            BuiltIn().log(msg, level=level, html=True)
+            return
+        
+        # keyword is already getting retried
+        if self.retry_stack and self.retry_stack[-1].keyword == keyword:
+            # all retries have been executed and keyword still failed
+            if not self.retry_stack[-1].remaining_retries:
+                self.retry_stack.pop()
+                msg = f"Keyword '{keyword.name}' FAILED after {retries - self.retry_stack[-1].remaining_retries}. retry!"
                 result.doc += f"\n\n{msg}"
-            else:
-                # set state: active kw retry
-                self.kw_retry_active = True
+                BuiltIn().log(msg, level=level, html=True)
+                self.retried_tests
+            self.retry_stack[-1].remaining_retries -= 1
+        # keyword failure gets detected the first time
+        else:
+            self.retry_stack.append(RetryKeyword(keyword, retries))
+        
+        msg = f"Keyword '{keyword.name}' - Perform {retries - self.retry_stack[-1].remaining_retries}. retry..."
+        result.doc += f"\n\n{msg}"
+        BuiltIn().log(msg, level=level, html=True)
+        
+        # insert keyword to the next executing index in the parent object
+        result.status = "NOT RUN"
+        keyword.parent.body.insert(keyword.parent.body.index(keyword), keyword)
 
-                # reset log level
-                self.reset_log_level(kw_to_retry)
-
-                prefix = "\n\n" if result.message else ""
-                doc = (
-                    f"{prefix}[Keyword: {kw_to_retry.kw_name}] FAILED on "
-                    f"{kw_to_retry.retries_performed}. retry."
-                )
-                performed = self.retry_keywords[current_index].retries_performed
-                msg = f"{prefix}[Keyword: {link}] FAILED on {performed}. retry."
-                result.doc += doc
-                result.message += doc
-                BuiltIn().log(msg.replace("\n", ""), level=level, html=True)
-                self.retry_keywords.pop(current_index)
+        if self.log_level and not self._original_log_level:
+            self._original_log_level = self.log_level
 
     def end_test(self, test: RunningTestCase, result: ResultTestCase) -> None:
-        if self.retries and self._original_log_level is not None:
+        if self.test_retries and self._original_log_level is not None:
             BuiltIn().set_log_level(self._original_log_level)
         if not self.max_retries:
-            self.retries = 0
+            self.test_retries = 0
             return
         if result.status == "FAIL":
-            if self.retries < self.max_retries:
+            if self.test_retries < self.max_retries:
                 self.test_retry_active = True
                 index = test.parent.tests.index(test)
                 test.parent.tests.insert(index + 1, copy.deepcopy(self.original_testcase_object))
                 result.status = "SKIP"
                 result.message += "\nSkipped for Retry"
                 self.retried_tests.append(test.longname)
-                self.retries += 1
+                self.test_retries += 1
                 return
             self.test_retry_active = False
             result.message += (
-                f"{linebreak * bool(result.message)}[RETRY] FAIL on {self.retries}. retry."
+                f"{linebreak * bool(result.message)}[RETRY] FAIL on {self.test_retries}. retry."
             )
-        elif self.retries:
+        elif self.test_retries:
             self.test_retry_active = False
             result.message += (
-                f"{linebreak * bool(result.message)}[RETRY] PASS on {self.retries}. retry."
+                f"{linebreak * bool(result.message)}[RETRY] PASS on {self.test_retries}. retry."
             )
-        self.retries = 0
+        self.test_retries = 0
         return
 
     def end_suite(self, suite: RunningTestSuite, result: ResultTestSuite) -> None:
@@ -251,7 +192,7 @@ class RetryFailed(ListenerV3):
             match = duplicate_test_pattern.match(message.message)
             if match and f"{match.group('suite')}.{match.group('test')}" in self.retried_tests:
                 message.message = (
-                    f"Retry {self.retries}/{self.max_retries} of test '{match.group('test')}':"
+                    f"Retry {self.test_retries}/{self.max_retries} of test '{match.group('test')}':"
                 )
                 if not self.warn_on_test_retry:
                     message.level = "INFO"
@@ -277,7 +218,7 @@ class RetryFailed(ListenerV3):
             else keyword_result.kwname
         )
 
-    def reset_log_level(self, kw_object: KeywordMetaData) -> None:
+    def reset_log_level(self, kw_object) -> None:
         """
         Reset to original loglevel if keyword uuid does match to the keyword
         which has initially modified the loglevel.
@@ -286,6 +227,16 @@ class RetryFailed(ListenerV3):
             self.kw_control_log_level = None
             self._original_log_level = None
             BuiltIn().set_log_level(self._original_log_level)
+
+    def _check_if_retry(self, tags: list, token: Literal["TEST", "KEYWORD"]) -> int:
+        """ Function checks if the given test / keyword should be retried or not - defined by their tags """
+        for tag in tags:
+            regex = self.kw_retry_regex if token == "KEYWORD" else self.test_retry_regex
+            retry_kw = re.match(regex, tag)
+            if not retry_kw:
+                continue
+            return int(retry_kw.group(1))
+        return 0
 
 
 class RetryMerger(ResultVisitor):  # type: ignore[misc]
