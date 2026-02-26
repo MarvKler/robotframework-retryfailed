@@ -17,7 +17,6 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
-from uuid import uuid4
 
 from robot.api.deco import library
 from robot.api.interfaces import ListenerV3
@@ -88,7 +87,7 @@ class RetryFailed(ListenerV3):
                 self._original_log_level = BuiltIn().set_log_level(self.log_level)
         if self.test_retries == 0 and not self.test_retry_active:
             self.original_testcase_object = copy.deepcopy(test)
-        
+
         retry_match = self._check_if_retry(test.tags, "TEST")
         if retry_match:
             self.max_retries = int(retry_match.group(1))
@@ -100,17 +99,17 @@ class RetryFailed(ListenerV3):
         pass
 
     def end_keyword(self, keyword: RunningKeyword, result: ResultKeyword):
-        
+
         # if keyword is not registered for retries -> return
         if not (retries := self._check_if_retry(result.tags, "KEYWORD")):
             return
-        
+
         level: LogLevel = "WARN" if self.warn_on_kw_retry else "INFO"
-        
+
         if result.status != "FAIL":
             if self.retry_stack and self.retry_stack[-1].keyword == keyword:
-                doc = f"[Keyword: {keyword.name}] PASSED on {retries - self.retry_stack[-1].remaining_retries}. retry."
-                msg = f"[Keyword: {self._get_keyword_link(result)}] PASSED on {retries - self.retry_stack[-1].remaining_retries}. retry."
+                doc = f"[Keyword: {keyword.name}] PASSED on {retries - self.retry_stack[-1].remaining_retries}. retry." # noqa
+                msg = f"[Keyword: {self._get_keyword_link(result)}] PASSED on {retries - self.retry_stack[-1].remaining_retries}. retry." # noqa
                 BuiltIn().log(msg, level=level, html=True)
                 result.doc += f"\n\n{doc}"
                 self.retry_stack.pop()
@@ -118,34 +117,34 @@ class RetryFailed(ListenerV3):
                     BuiltIn().set_log_level(self._original_log_level)
                     self._original_log_level = None
             return
-        
+
         if keyword.type in ("SETUP", "TEARDOWN"):
-            msg = "Keyword in SETUP and TEARDOWN can't be retried directly - use wrapper keyword instead!"
-            result.doc += f"\n\n{msg}"
-            BuiltIn().log(msg, level=level, html=True)
+            BuiltIn().log(
+                "Keyword in SETUP & TEARDOWN can't be retried directly - use wrapper keyword!",
+                level="WARN",
+                html=True)
             return
-        
+
         # keyword is already getting retried
         if self.retry_stack and self.retry_stack[-1].keyword == keyword:
             # all retries have been executed and keyword still failed
             if not self.retry_stack[-1].remaining_retries:
                 self.retry_stack.pop()
-                msg = f"Keyword '{keyword.name}' FAILED after {retries - self.retry_stack[-1].remaining_retries}. retry!"
+                msg = f"Keyword '{keyword.name}' FAILED after {retries - self.retry_stack[-1].remaining_retries}. retry!" # noqa
                 result.doc += f"\n\n{msg}"
                 BuiltIn().log(msg, level=level, html=True)
-                self.retried_tests
-            self.retry_stack[-1].remaining_retries -= 1
+                return
         # keyword failure gets detected the first time
         else:
             self.retry_stack.append(RetryKeyword(keyword, retries))
-        
-        msg = f"Keyword '{keyword.name}' - Perform {retries - self.retry_stack[-1].remaining_retries}. retry..."
-        result.doc += f"\n\n{msg}"
+
+        msg = f"Keyword '{keyword.name}' - Perform {retries - self.retry_stack[-1].remaining_retries + 1}. retry..." # noqa
         BuiltIn().log(msg, level=level, html=True)
-        
+
         # insert keyword to the next executing index in the parent object
         result.status = "NOT RUN"
         keyword.parent.body.insert(keyword.parent.body.index(keyword), keyword)
+        self.retry_stack[-1].remaining_retries -= 1
 
         if self.log_level and not self._original_log_level:
             self._original_log_level = self.log_level
@@ -229,7 +228,9 @@ class RetryFailed(ListenerV3):
             BuiltIn().set_log_level(self._original_log_level)
 
     def _check_if_retry(self, tags: list, token: Literal["TEST", "KEYWORD"]) -> int:
-        """ Function checks if the given test / keyword should be retried or not - defined by their tags """
+        """
+        Function checks if the given test / keyword should be retried or not - defined by their tags
+        """
         for tag in tags:
             regex = self.kw_retry_regex if token == "KEYWORD" else self.test_retry_regex
             retry_kw = re.match(regex, tag)
