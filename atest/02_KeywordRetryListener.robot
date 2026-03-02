@@ -29,6 +29,12 @@ Test 5 - Failed Multiple Child Keywords - Pass on Retry
 
     Test 5 - Parent Keyword
 
+Test 6 - Direct Keyword Call in Setup / Teardown - Expected Failure
+    [Setup]    Error - Pass on Retry    5
+    [Teardown]    Run Keyword If    $TEST_STATUS == "PASS"    Fail    Test was expected to fail but it did pass!
+    [Tags]    robot:skip-on-failure
+    Log    Test should fail!
+
 
 *** Keywords ***
 Successful Keyword
