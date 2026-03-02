@@ -28,3 +28,14 @@ repos:
         language: python
         types_or: [python, pyi, jupyter]
         require_serial: true
+
+  # Robot framework acceptance tests
+  - repo: local
+    hooks:
+      - id: acceptance-tests
+        name: acceptance-tests
+        description: "Run Robot Framework acceptance tests"
+        entry: robot -d results --listener RetryFailed:0:True:TRACE --loglevel INFO atest
+        language: system
+        pass_filenames: false
+        always_run: true
