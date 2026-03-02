@@ -29,10 +29,8 @@ from robot.result import ExecutionResult, ResultVisitor
 from robot.result import Keyword as ResultKeyword
 from robot.result import Message as ResultMessage
 from robot.result import TestCase as ResultTestCase
-from robot.result import TestSuite as ResultTestSuite
 from robot.running import Keyword as RunningKeyword
 from robot.running import TestCase as RunningTestCase
-from robot.running import TestSuite as RunningTestSuite
 from robot.utils.robottypes import is_truthy
 
 duplicate_test_pattern = re.compile(
@@ -145,7 +143,7 @@ class RetryFailed(ListenerV3):
 
         # set log level in case of keyword must be retried
         if self.log_level:
-            self.set_loglevel(self.log_level)
+            self.set_loglevel()
 
     def end_test(self, test: RunningTestCase, result: ResultTestCase) -> None:
         if not self.max_retries:
@@ -154,7 +152,7 @@ class RetryFailed(ListenerV3):
         if result.status == "FAIL":
             if self.test_retries < self.max_retries:
                 if self.log_level:
-                    self.set_loglevel(self.log_level)
+                    self.set_loglevel()
                 self.test_retry_active = True
                 index = test.parent.tests.index(test)
                 test.parent.tests.insert(index + 1, copy.deepcopy(self.original_testcase_object))
@@ -177,14 +175,14 @@ class RetryFailed(ListenerV3):
         self.test_retries = 0
         return
 
-    def end_suite(self, suite: RunningTestSuite, result: ResultTestSuite) -> None:
-        test_dict = {}
-        result_dict = {}
-        for result_test, test in zip(result.tests, suite.tests, strict=False):
-            test_dict[test.id] = test
-            result_dict[test.id] = result_test
-        result.tests = list(result_dict.values())
-        suite.tests = list(test_dict.values())
+    # def end_suite(self, suite: RunningTestSuite, result: ResultTestSuite) -> None:
+    #     test_dict = {}
+    #     result_dict = {}
+    #     for result_test, test in zip(result.tests, suite.tests, strict=False):
+    #         test_dict[test.id] = test
+    #         result_dict[test.id] = result_test
+    #     result.tests = list(result_dict.values())
+    #     suite.tests = list(test_dict.values())
 
     def message(self, message: ResultMessage) -> None:
         if message.level == "WARN":
@@ -229,17 +227,14 @@ class RetryFailed(ListenerV3):
             return int(retry_kw.group(1))
         return 0
 
-    def set_loglevel(
-        self,
-        level: LogLevel | None,
-    ) -> None:
+    def set_loglevel(self) -> None:
         """
         Custom function to set robot log level correctly.
         """
         if BuiltIn()._context.output.log_level.level == self.log_level:
             return
-        self.initial_log_level = BuiltIn()._context.output.set_log_level(level)
-        BuiltIn()._namespace.variables.set_global("${LOG_LEVEL}", level)
+        self.initial_log_level = BuiltIn()._context.output.set_log_level(self.log_level)
+        BuiltIn()._namespace.variables.set_global("${LOG_LEVEL}", self.log_level)
         if BuiltIn()._context.output.log_level.level != self.log_level:
             logger.warn("Setting log level failed!")
 
@@ -247,7 +242,11 @@ class RetryFailed(ListenerV3):
         """
         Custom function to reset robot log level correctly.
         """
-        BuiltIn().reset_log_level()
+        _initial_log_level = BuiltIn()._context.output.initial_log_level
+        if BuiltIn()._context.output.log_level.level == _initial_log_level:
+            return
+        BuiltIn()._context.output.set_log_level(_initial_log_level)
+        BuiltIn()._namespace.variables.set_global("${LOG_LEVEL}", _initial_log_level)
         if BuiltIn()._context.output.log_level.level != self.initial_log_level:
             logger.warn("Resetting log level failed!")
 
