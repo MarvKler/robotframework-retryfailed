@@ -16,7 +16,7 @@ import copy
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from robot.api.deco import library
 from robot.api.interfaces import ListenerV3
@@ -39,6 +39,7 @@ duplicate_test_pattern = re.compile(
 )
 linebreak = "\n"
 
+
 @dataclass
 class RetryKeyword:
     keyword: RunningKeyword
@@ -51,7 +52,7 @@ class RetryFailed(ListenerV3):
         self,
         global_test_retries: int = 0,
         keep_retried_tests: bool = False,
-        log_level: str | None = None,
+        log_level: LogLevel | None = None,
         warn_on_test_retry: bool = True,
         warn_on_kw_retry: bool = False,
     ):
@@ -67,9 +68,8 @@ class RetryFailed(ListenerV3):
         self._max_retries_by_default = int(global_test_retries)
         self.max_retries = global_test_retries
         self.keep_retried_tests = is_truthy(keep_retried_tests)
-        self.log_level = log_level
-        self.kw_control_log_level: str | None = None
-        self._original_log_level: str | None = None
+        self.log_level: LogLevel | None = log_level
+        self.initial_log_level: str | None = None
         self.test_retry_active: bool = False
         self.original_testcase_object: RunningTestCase = None
 
@@ -80,25 +80,20 @@ class RetryFailed(ListenerV3):
         self.kw_retry_regex = r"keyword:retry\((\d+)\)"
         self.test_retry_regex = r"(?:test|task):retry\((\d+)\)"
 
-    def start_test(self, test: RunningTestCase, result: ResultTestCase) -> None:
+    def start_test(self, test: RunningTestCase, _: ResultTestCase) -> None:
         if self.test_retries:
             BuiltIn().set_test_variable("${RETRYFAILED_RETRY_INDEX}", self.test_retries)
-            if self.log_level is not None:
-                self._original_log_level = BuiltIn().set_log_level(self.log_level)
         if self.test_retries == 0 and not self.test_retry_active:
             self.original_testcase_object = copy.deepcopy(test)
 
-        retry_match = self._check_if_retry(test.tags, "TEST")
-        if retry_match:
-            self.max_retries = int(retry_match.group(1))
+        retries = self._check_if_retry(test.tags, "TEST")
+        if retries:
+            self.max_retries = retries
             return
         self.max_retries = self._max_retries_by_default
         return
 
-    def start_keyword(self, keyword: RunningKeyword, result: ResultKeyword) -> None:
-        pass
-
-    def end_keyword(self, keyword: RunningKeyword, result: ResultKeyword):
+    def end_keyword(self, keyword: RunningKeyword, result: ResultKeyword) -> Any:
 
         # if keyword is not registered for retries -> return
         if not (retries := self._check_if_retry(result.tags, "KEYWORD")):
@@ -108,37 +103,38 @@ class RetryFailed(ListenerV3):
 
         if result.status != "FAIL":
             if self.retry_stack and self.retry_stack[-1].keyword == keyword:
-                doc = f"[Keyword: {keyword.name}] PASSED on {retries - self.retry_stack[-1].remaining_retries}. retry." # noqa
-                msg = f"[Keyword: {self._get_keyword_link(result)}] PASSED on {retries - self.retry_stack[-1].remaining_retries}. retry." # noqa
+                doc = f"[Keyword: {keyword.name}] PASSED on {retries - self.retry_stack[-1].remaining_retries}. retry."  # noqa
+                msg = f"[Keyword: {self._get_keyword_link(result)}] PASSED on {retries - self.retry_stack[-1].remaining_retries}. retry."  # noqa
                 BuiltIn().log(msg, level=level, html=True)
                 result.doc += f"\n\n{doc}"
                 self.retry_stack.pop()
-                if not self.retry_stack and self.test_retries:
-                    BuiltIn().set_log_level(self._original_log_level)
-                    self._original_log_level = None
+                if not self.retry_stack and not self.test_retry_active:
+                    self.reset_loglevel()
             return
 
         if keyword.type in ("SETUP", "TEARDOWN"):
             BuiltIn().log(
                 "Keyword in SETUP & TEARDOWN can't be retried directly - use wrapper keyword!",
                 level="WARN",
-                html=True)
+                html=True,
+            )
             return
 
         # keyword is already getting retried
         if self.retry_stack and self.retry_stack[-1].keyword == keyword:
             # all retries have been executed and keyword still failed
             if not self.retry_stack[-1].remaining_retries:
+                msg = f"Keyword '{keyword.name}' FAILED after {retries - self.retry_stack[-1].remaining_retries}. retry!"  # noqa
                 self.retry_stack.pop()
-                msg = f"Keyword '{keyword.name}' FAILED after {retries - self.retry_stack[-1].remaining_retries}. retry!" # noqa
                 result.doc += f"\n\n{msg}"
                 BuiltIn().log(msg, level=level, html=True)
+                self.reset_loglevel()
                 return
         # keyword failure gets detected the first time
         else:
             self.retry_stack.append(RetryKeyword(keyword, retries))
 
-        msg = f"Keyword '{keyword.name}' - Perform {retries - self.retry_stack[-1].remaining_retries + 1}. retry..." # noqa
+        msg = f"Keyword '{keyword.name}' - Perform {retries - self.retry_stack[-1].remaining_retries + 1}. retry..."  # noqa
         BuiltIn().log(msg, level=level, html=True)
 
         # insert keyword to the next executing index in the parent object
@@ -146,17 +142,18 @@ class RetryFailed(ListenerV3):
         keyword.parent.body.insert(keyword.parent.body.index(keyword), keyword)
         self.retry_stack[-1].remaining_retries -= 1
 
-        if self.log_level and not self._original_log_level:
-            self._original_log_level = self.log_level
+        # set log level in case of keyword must be retried
+        if self.log_level:
+            self.set_loglevel(self.log_level)
 
     def end_test(self, test: RunningTestCase, result: ResultTestCase) -> None:
-        if self.test_retries and self._original_log_level is not None:
-            BuiltIn().set_log_level(self._original_log_level)
         if not self.max_retries:
             self.test_retries = 0
             return
         if result.status == "FAIL":
             if self.test_retries < self.max_retries:
+                if self.log_level:
+                    self.set_loglevel(self.log_level)
                 self.test_retry_active = True
                 index = test.parent.tests.index(test)
                 test.parent.tests.insert(index + 1, copy.deepcopy(self.original_testcase_object))
@@ -174,6 +171,8 @@ class RetryFailed(ListenerV3):
             result.message += (
                 f"{linebreak * bool(result.message)}[RETRY] PASS on {self.test_retries}. retry."
             )
+        if self.log_level:
+            self.reset_loglevel()
         self.test_retries = 0
         return
 
@@ -217,17 +216,7 @@ class RetryFailed(ListenerV3):
             else keyword_result.kwname
         )
 
-    def reset_log_level(self, kw_object) -> None:
-        """
-        Reset to original loglevel if keyword uuid does match to the keyword
-        which has initially modified the loglevel.
-        """
-        if self._original_log_level and kw_object.kw_uuid == self.kw_control_log_level:
-            self.kw_control_log_level = None
-            self._original_log_level = None
-            BuiltIn().set_log_level(self._original_log_level)
-
-    def _check_if_retry(self, tags: list, token: Literal["TEST", "KEYWORD"]) -> int:
+    def _check_if_retry(self, tags: list[str], token: Literal["TEST", "KEYWORD"]) -> int:
         """
         Function checks if the given test / keyword should be retried or not - defined by their tags
         """
@@ -238,6 +227,28 @@ class RetryFailed(ListenerV3):
                 continue
             return int(retry_kw.group(1))
         return 0
+
+    def set_loglevel(
+        self,
+        level: LogLevel | None,
+    ) -> None:
+        """
+        Custom function to set robot log level correctly.
+        """
+        if BuiltIn()._context.output.log_level.level == self.log_level:
+            return
+        self.initial_log_level = BuiltIn()._context.output.set_log_level(level)
+        BuiltIn()._namespace.variables.set_global("${LOG_LEVEL}", level)
+        if BuiltIn()._context.output.log_level.level != self.log_level:
+            raise ValueError("Setting log level failed!")
+
+    def reset_loglevel(self) -> None:
+        """
+        Custom function to reset robot log level correctly.
+        """
+        BuiltIn().reset_log_level()
+        if BuiltIn()._context.output.log_level.level != self.initial_log_level:
+            raise ValueError("Resetting log level failed!")
 
 
 class RetryMerger(ResultVisitor):  # type: ignore[misc]

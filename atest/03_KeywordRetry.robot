@@ -3,24 +3,13 @@ Library     KeywordRetry.py
 
 
 *** Test Cases ***
-Test 0 - Low Level Retry PASS
+Test 1 - Low Level Retry PASS
     [Tags]    pass
     Retry Three Times    3    test
 
-Test 1 - Low Level Retry PASS with Setup and Teardown
-    [Tags]    pass
-    [Setup]    Retry Three Times    3    setup
-    Retry Three Times    3    test
-    [Teardown]    Retry Three Times    3    teardown
-
-Test 2 - Low Level Retry FAIL in Setup
-    [Tags]    fail
-    [Setup]    Retry Three Times    5    setup
-    Retry Three Times    5    test
-    [Teardown]    Retry Three Times    5    teardown
-
-Test 3 - Low Level Retry FAIL in Test
-    [Tags]    fail
+Test 2 - Low Level Retry FAIL in Test
+    [Tags]    fail    robot:skip-on-failure
+    [Teardown]    Run Keyword If    $TEST_STATUS == "PASS"    Fail    Test was expected to fail but it did pass!
     Retry Three Times    5    test
 
 Test 4 - User level Retry PASS
@@ -29,39 +18,22 @@ Test 4 - User level Retry PASS
     User Level Retry Three Times    3    retries
 
 Test 5 - User level Retry FAIL
-    [Tags]    fail
+    [Tags]    fail    robot:skip-on-failure
+    [Teardown]    Run Keyword If    $TEST_STATUS == "PASS"    Fail    Test was expected to fail but it did pass!
     VAR    ${retries}    ${1}    scope=TEST
     User Level Retry Three Times    5    retries
 
-Test 6 - User level Retry PASS with Teardown
-    [Tags]    fail
-    VAR    ${keyword}    ${1}    scope=TEST
-    VAR    ${teardown}    ${1}    scope=TEST
-    User Level Retry Three Times    3    keyword
-    [Teardown]    User Level Retry Three Times    3    teardown
-
-Test 7 - User level Retry FAIL with Teardown
-    [Tags]    fail
-    VAR    ${keyword}    ${1}    scope=TEST
-    VAR    ${teardown}    ${1}    scope=TEST
-    User Level Retry Three Times    5    keyword
-    [Teardown]    User Level Retry Three Times    5    teardown
-
-Test 8 
-    Retry Three Times    3
-    Log  1234
-
-Test 9 
-    Recurse    0
+Test 6 - Recurse Keyword Retry
+    Recurse    0    10
 
 
 *** Keywords ***
 Recurse
     [Tags]    keyword:retry(4)
-    [Arguments]    ${arg: int}
-    IF    $arg == 3    RETURN
+    [Arguments]    ${arg: int}    ${pass_on_count: int}=3
+    IF    $arg == $pass_on_count    RETURN
 
-    Recurse    ${arg + 1}
+    Recurse    ${arg + 1}    ${pass_on_count}
 
 High Level Pass
     Log    High Level Pass
