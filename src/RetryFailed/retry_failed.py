@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from robot.api import logger
 from robot.api.deco import library
 from robot.api.interfaces import ListenerV3
 from robot.api.logger import LogLevel
@@ -240,7 +241,7 @@ class RetryFailed(ListenerV3):
         self.initial_log_level = BuiltIn()._context.output.set_log_level(level)
         BuiltIn()._namespace.variables.set_global("${LOG_LEVEL}", level)
         if BuiltIn()._context.output.log_level.level != self.log_level:
-            raise ValueError("Setting log level failed!")
+            logger.warn("Setting log level failed!")
 
     def reset_loglevel(self) -> None:
         """
@@ -248,7 +249,7 @@ class RetryFailed(ListenerV3):
         """
         BuiltIn().reset_log_level()
         if BuiltIn()._context.output.log_level.level != self.initial_log_level:
-            raise ValueError("Resetting log level failed!")
+            logger.warn("Resetting log level failed!")
 
 
 class RetryMerger(ResultVisitor):  # type: ignore[misc]
