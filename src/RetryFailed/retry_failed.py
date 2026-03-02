@@ -175,15 +175,6 @@ class RetryFailed(ListenerV3):
         self.test_retries = 0
         return
 
-    # def end_suite(self, suite: RunningTestSuite, result: ResultTestSuite) -> None:
-    #     test_dict = {}
-    #     result_dict = {}
-    #     for result_test, test in zip(result.tests, suite.tests, strict=False):
-    #         test_dict[test.id] = test
-    #         result_dict[test.id] = result_test
-    #     result.tests = list(result_dict.values())
-    #     suite.tests = list(test_dict.values())
-
     def message(self, message: ResultMessage) -> None:
         if message.level == "WARN":
             match = duplicate_test_pattern.match(message.message)
